@@ -14,3 +14,4 @@ qdrant-client~=1.13.3
 APScheduler~=3.10.4
 edge-tts
 faster-whisper~=1.1.1
+ipython

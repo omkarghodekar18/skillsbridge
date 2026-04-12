@@ -17,7 +17,6 @@ bio                 str | None  Short biography
 resume_url          str | None  Cloudinary URL of uploaded resume
 resume_public_id    str | None  Cloudinary public ID (for deletion)
 skills              list[str]   Skills extracted from resume
-resume_embedding    list[float] 384-dim embedding of resume text
 role                str         User role (default: "user")
 created_at          datetime    When the record was created
 updated_at          datetime    When the record was last updated

@@ -14,7 +14,6 @@ from utils.embedding import generate_embedding
 from utils.qdrant_store import upsert_job_vector, flush_all_jobs
 from utils.nlp import get_skill_extractor
 
-JSEARCH_API_KEY = os.getenv("JSEARCH_API_KEY")
 JSEARCH_URL = "https://jsearch.p.rapidapi.com/search"
 
 COLLECTION = "jobs"
@@ -26,8 +25,9 @@ def _collection():
 
 
 def fetch_jobs(country="in"):
+    jsearch_api_key = os.getenv("JSEARCH_API_KEY")
 
-    if not JSEARCH_API_KEY:
+    if not jsearch_api_key:
         raise RuntimeError("JSEARCH_API_KEY missing")
 
     col = _collection()
@@ -50,7 +50,7 @@ def fetch_jobs(country="in"):
     stored_count = 0
 
     headers = {
-        "X-RapidAPI-Key": JSEARCH_API_KEY,
+        "X-RapidAPI-Key": jsearch_api_key,
         "X-RapidAPI-Host": "jsearch.p.rapidapi.com",
     }
 

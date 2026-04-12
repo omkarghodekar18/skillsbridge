@@ -260,7 +260,7 @@ export default function InterviewsPage() {
                         className="gap-2 border-violet-500/50 text-violet-600 hover:bg-violet-500/10 hover:text-violet-700 dark:border-violet-400/50 dark:text-violet-400 dark:hover:bg-violet-400/10 dark:hover:text-violet-300 shadow-sm"
                         asChild
                       >
-                        <Link href={`/dashboard/interviews/${job.job_id}`}>
+                        <Link href={`/dashboard/interviews/${job.job_id}?title=${encodeURIComponent(job.title || "")}`}>
                           <PlayCircle className="h-3.5 w-3.5" />
                           Start Interview
                         </Link>

@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { useAuth } from "@clerk/nextjs"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -11,113 +12,33 @@ import {
   Briefcase,
   Calendar,
   MessageSquare,
+  Loader2,
 } from "lucide-react"
-
-interface UpskillTopic {
-  skill: string
-  reason: string
-  resources: string[]
-}
 
 interface InterviewFeedback {
   id: string
   jobTitle: string
-  company: string
   date: string
   overallRating: "Strong" | "Good" | "Needs Work"
+  score: number
   summary: string
   strengths: string[]
   improvements: string[]
-  upskillPlan: UpskillTopic[]
 }
 
-// Placeholder data — will be replaced with real AI-generated feedback per interview
-const PAST_INTERVIEWS: InterviewFeedback[] = [
-  {
-    id: "1",
-    jobTitle: "Frontend Developer",
-    company: "TechCorp",
-    date: "2026-02-20",
-    overallRating: "Good",
-    summary:
-      "You demonstrated solid React knowledge and communicated your thought process clearly. A few answers lacked depth on system-level thinking.",
-    strengths: [
-      "Strong command of React hooks and state management",
-      "Clear communication style with good examples",
-      "Showed genuine enthusiasm for the role",
-    ],
-    improvements: [
-      "Answers on CSS performance optimization were surface-level",
-      "Could structure behavioral answers using STAR method more consistently",
-    ],
-    upskillPlan: [
-      {
-        skill: "CSS Performance",
-        reason: "Struggled with browser rendering pipeline questions",
-        resources: ["web.dev/performance", "CSS Tricks — Critical Rendering Path"],
-      },
-      {
-        skill: "Behavioral Interviewing (STAR)",
-        reason: "Answers lacked structured storytelling",
-        resources: ["STAR Method Guide — Indeed", "Pramp mock behavioral interviews"],
-      },
-    ],
-  },
-  {
-    id: "2",
-    jobTitle: "Full Stack Engineer",
-    company: "StartupXYZ",
-    date: "2026-02-14",
-    overallRating: "Needs Work",
-    summary:
-      "Backend questions around database design exposed gaps in SQL knowledge. Frontend section was handled well. Need to focus on system design fundamentals.",
-    strengths: [
-      "Confident on the frontend — React, Next.js routing, and API integration",
-      "Good problem decomposition for UI tasks",
-    ],
-    improvements: [
-      "Database normalization and indexing answers were incomplete",
-      "Struggled to scale a system beyond a basic CRUD design",
-      "Didn't ask clarifying questions during system design",
-    ],
-    upskillPlan: [
-      {
-        skill: "SQL & Database Design",
-        reason: "Weak on normalization, indexing, and query optimization",
-        resources: ["SQLZoo interactive exercises", "Use The Index, Luke (book)"],
-      },
-      {
-        skill: "System Design",
-        reason: "Could not scale a design beyond simple CRUD",
-        resources: ["System Design Primer — GitHub", "Grokking the System Design Interview"],
-      },
-    ],
-  },
-  {
-    id: "3",
-    jobTitle: "Junior Software Engineer",
-    company: "GlobalFinance",
-    date: "2026-02-08",
-    overallRating: "Strong",
-    summary:
-      "Excellent overall performance. Algorithms were solved efficiently with clear explanations. Behavioral round was your strongest — specific examples, good reflection.",
-    strengths: [
-      "Solved two medium LeetCode problems optimally with explanation",
-      "Strong behavioral answers with concrete examples",
-      "Asked excellent questions about team culture and tech stack",
-    ],
-    improvements: [
-      "Minor: one answer on Big-O analysis was slightly off — review space complexity",
-    ],
-    upskillPlan: [
-      {
-        skill: "Space Complexity Analysis",
-        reason: "One subtle mistake in Big-O space analysis",
-        resources: ["NeetCode.io Big-O refresher", "CS Dojo — Space Complexity video"],
-      },
-    ],
-  },
-]
+interface InterviewApiItem {
+  _id: string
+  job_title?: string
+  created_at?: string
+  score?: number
+  ai_evaluation?: {
+    overall_score?: number
+    overall_rating?: string
+    summary?: string
+    strengths?: string[]
+    weaknesses?: string[]
+  }
+}
 
 const ratingConfig = {
   Strong: { class: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400", dot: "bg-green-500" },
@@ -146,12 +67,15 @@ function InterviewFeedbackCard({ interview }: { interview: InterviewFeedback }) 
             <Briefcase className="h-5 w-5 shrink-0 text-muted-foreground" />
             <div className="min-w-0">
               <CardTitle className="text-base truncate">{interview.jobTitle}</CardTitle>
-              <CardDescription className="truncate">{interview.company}</CardDescription>
+              <CardDescription className="truncate">Interview evaluation</CardDescription>
             </div>
           </div>
           <div className="flex items-center gap-3 shrink-0">
             <span className="hidden sm:flex items-center gap-1 text-xs text-muted-foreground">
               <Calendar className="h-3 w-3" /> {dateLabel}
+            </span>
+            <span className="hidden sm:inline text-xs text-muted-foreground">
+              Score: {interview.score}/10
             </span>
             <Badge className={`text-xs font-medium ${rating.class}`}>
               <span className={`mr-1.5 h-1.5 w-1.5 rounded-full ${rating.dot} inline-block`} />
@@ -176,34 +100,38 @@ function InterviewFeedbackCard({ interview }: { interview: InterviewFeedback }) 
 
           <div className="grid gap-4 md:grid-cols-2">
             {/* Strengths */}
-            <div>
-              <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold text-green-600 dark:text-green-400">
-                <TrendingUp className="h-4 w-4" /> Strengths
-              </h4>
-              <ul className="space-y-2">
-                {interview.strengths.map((s, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
-                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-green-500 shrink-0" />
-                    {s}
-                  </li>
-                ))}
-              </ul>
-            </div>
+            {interview.strengths.length > 0 ? (
+              <div>
+                <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold text-green-600 dark:text-green-400">
+                  <TrendingUp className="h-4 w-4" /> Strengths
+                </h4>
+                <ul className="space-y-2">
+                  {interview.strengths.map((s, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
+                      <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-green-500 shrink-0" />
+                      {s}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
 
             {/* Areas to Improve */}
-            <div>
-              <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold text-amber-600 dark:text-amber-400">
-                <Lightbulb className="h-4 w-4" /> Areas to Improve
-              </h4>
-              <ul className="space-y-2">
-                {interview.improvements.map((s, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
-                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
-                    {s}
-                  </li>
-                ))}
-              </ul>
-            </div>
+            {interview.improvements.length > 0 ? (
+              <div>
+                <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold text-amber-600 dark:text-amber-400">
+                  <Lightbulb className="h-4 w-4" /> Areas to Improve
+                </h4>
+                <ul className="space-y-2">
+                  {interview.improvements.map((s, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
+                      <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
+                      {s}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </div>
         </CardContent>
       )}
@@ -212,6 +140,84 @@ function InterviewFeedbackCard({ interview }: { interview: InterviewFeedback }) 
 }
 
 export default function AnalyticsPage() {
+  const { getToken } = useAuth()
+  const [items, setItems] = useState<InterviewFeedback[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+
+    async function loadInterviews() {
+      setLoading(true)
+      setError(null)
+      try {
+        const token = await getToken()
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/interviews?limit=30`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+
+        if (!res.ok) {
+          throw new Error("Failed to load analytics")
+        }
+
+        const data = await res.json()
+        const mapped: InterviewFeedback[] = (data.items || []).flatMap((item: InterviewApiItem) => {
+          const evalData = item.ai_evaluation
+          if (!evalData || typeof evalData !== "object") {
+            return []
+          }
+
+          const summary = (evalData.summary || "").trim()
+          if (!summary) {
+            return []
+          }
+
+          const rawScore = Number(evalData.overall_score ?? item.score ?? 0)
+          if (!Number.isFinite(rawScore) || rawScore <= 0) {
+            return []
+          }
+
+          const rating =
+            rawScore >= 8 ? "Strong" : rawScore >= 6 ? "Good" : "Needs Work"
+
+          return [{
+            id: item._id,
+            jobTitle: item.job_title || "Untitled Role",
+            date: item.created_at || new Date().toISOString(),
+            overallRating: (evalData.overall_rating as InterviewFeedback["overallRating"]) || rating,
+            score: Math.max(0, Math.min(10, Number.isFinite(rawScore) ? rawScore : 0)),
+            summary,
+            strengths: Array.isArray(evalData.strengths)
+              ? evalData.strengths.filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+              : [],
+            improvements: Array.isArray(evalData.weaknesses)
+              ? evalData.weaknesses.filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+              : [],
+          }]
+        })
+
+        if (active) {
+          setItems(mapped)
+        }
+      } catch {
+        if (active) setError("Could not load interview analytics")
+      } finally {
+        if (active) setLoading(false)
+      }
+    }
+
+    void loadInterviews()
+    return () => {
+      active = false
+    }
+  }, [getToken])
+
+  const sortedItems = useMemo(
+    () => [...items].sort((a, b) => +new Date(b.date) - +new Date(a.date)),
+    [items]
+  )
+
   return (
     <main className="min-h-screen bg-background p-8">
       <div className="mx-auto max-w-3xl">
@@ -224,7 +230,23 @@ export default function AnalyticsPage() {
           </div>
         </div>
 
-        {PAST_INTERVIEWS.length === 0 ? (
+        {loading && (
+          <Card>
+            <CardContent className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading interview analytics...
+            </CardContent>
+          </Card>
+        )}
+
+        {error && !loading && (
+          <Card>
+            <CardContent className="py-16 text-center text-sm text-red-500">
+              {error}
+            </CardContent>
+          </Card>
+        )}
+
+        {!loading && !error && sortedItems.length === 0 ? (
           <Card>
             <CardContent className="flex flex-col items-center justify-center py-16 text-center">
               <MessageSquare className="h-12 w-12 mb-4 text-muted-foreground/40" />
@@ -234,13 +256,15 @@ export default function AnalyticsPage() {
               </p>
             </CardContent>
           </Card>
-        ) : (
+        ) : null}
+
+        {!loading && !error && sortedItems.length > 0 ? (
           <div className="space-y-4">
-            {PAST_INTERVIEWS.map((interview) => (
+            {sortedItems.map((interview) => (
               <InterviewFeedbackCard key={interview.id} interview={interview} />
             ))}
           </div>
-        )}
+        ) : null}
       </div>
     </main>
   )

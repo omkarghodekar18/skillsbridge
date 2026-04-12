@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState, useCallback } from "react"
-import { useParams } from "next/navigation"
+import { useParams, useSearchParams } from "next/navigation"
 import { useAuth } from "@clerk/nextjs"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -15,30 +15,20 @@ import {
   Loader2,
 } from "lucide-react"
 import Link from "next/link"
-import dynamic from "next/dynamic"
 
-// Dynamically import the 3D avatar (Canvas cannot SSR)
-const AIAvatar3D = dynamic(
-  () => import("@/components/interview/AIAvatar3D").then((m) => m.AIAvatar3D),
-  { ssr: false, loading: () => <AvatarPlaceholder /> }
-)
-
-function AvatarPlaceholder() {
+function InterviewAvatarCard({ isSpeaking }: { isSpeaking: boolean }) {
   return (
-    <div className="h-72 w-72 flex items-center justify-center rounded-full bg-gradient-to-br from-blue-900 via-indigo-900 to-purple-900 opacity-60">
-      <span className="text-5xl">🤖</span>
+    <div className="w-full rounded-2xl border border-slate-700 bg-gradient-to-b from-slate-900 to-slate-800 p-10 text-center shadow-2xl">
+      <div className="mx-auto mb-3 flex h-20 w-20 items-center justify-center rounded-full bg-indigo-500/15 text-4xl">
+        🤖
+      </div>
+      <p className="text-sm font-medium text-slate-100">AI Interviewer</p>
+      <p className="mt-1 text-xs text-slate-300">
+        {isSpeaking ? "Speaking..." : "Listening..."}
+      </p>
     </div>
   )
 }
-
-// Fallback questions if AI generation fails
-const FALLBACK_QUESTIONS = [
-  "Tell me about yourself and your professional background.",
-  "What motivated you to apply for this role?",
-  "Describe a challenging project you worked on and how you handled it.",
-  "How do you prioritize tasks when you have multiple deadlines?",
-  "Tell me about a time you had to work collaboratively in a team.",
-]
 
 type Phase = "intro" | "ai-speaking" | "user-answering" | "done"
 
@@ -47,27 +37,50 @@ interface Answer {
   transcript: string
 }
 
+interface InterviewEvaluation {
+  overall_score: number
+  overall_rating: string
+  summary: string
+  per_question: Array<{
+    question: string
+    answer: string
+    score: number
+    feedback: string
+  }>
+  strengths: string[]
+  weaknesses: string[]
+  upskill_topics: Array<{
+    skill: string
+    reason: string
+    resources: string[]
+  }>
+}
+
 export default function InterviewSessionPage() {
   const params = useParams()
+  const searchParams = useSearchParams()
+  const jobTitle = searchParams.get("title") || ""
   const { getToken } = useAuth()
 
   const [questions, setQuestions]               = useState<string[]>([])
   const [loadingQuestions, setLoadingQuestions] = useState(true)
+  const [questionError, setQuestionError]       = useState<string | null>(null)
   const [phase, setPhase]                       = useState<Phase>("intro")
   const [questionIndex, setQuestionIndex]       = useState(0)
   const [transcript, setTranscript]             = useState("")
   const [isMuted, setIsMuted]                   = useState(false)
   const [answers, setAnswers]                   = useState<Answer[]>([])
   const [avatarSpeaking, setAvatarSpeaking]     = useState(false)
-  const [avatarAmplitude, setAvatarAmplitude]   = useState(0)
   const [isRecording, setIsRecording]           = useState(false)
   const [isTranscribing, setIsTranscribing]     = useState(false)
+  const [isSavingInterview, setIsSavingInterview] = useState(false)
+  const [saveError, setSaveError]               = useState<string | null>(null)
   const [recordingError, setRecordingError]     = useState<string | null>(null)
   const [transcribeError, setTranscribeError]   = useState<string | null>(null)
+  const [finalEvaluation, setFinalEvaluation]   = useState<InterviewEvaluation | null>(null)
+  const [savedInterviewId, setSavedInterviewId] = useState<string | null>(null)
 
   const audioCtxRef    = useRef<AudioContext | null>(null)
-  const analyserRef    = useRef<AnalyserNode | null>(null)
-  const animFrameRef   = useRef<number>(0)
   const sourceRef      = useRef<AudioBufferSourceNode | null>(null)
   // MediaRecorder refs
   const mediaRecRef    = useRef<MediaRecorder | null>(null)
@@ -81,6 +94,7 @@ export default function InterviewSessionPage() {
     let mounted = true
     async function initQuestions() {
       try {
+        setQuestionError(null)
         const token = await getToken()
         const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/ask`, {
           method: "POST",
@@ -91,18 +105,23 @@ export default function InterviewSessionPage() {
           body: JSON.stringify({ job_id: params.id })
         })
         if (!res.ok) {
-          if (res.status === 429 || res.status === 503) {
-            if (mounted) setQuestions(FALLBACK_QUESTIONS)
-            return
-          }
-          throw new Error(`Failed to fetch questions: ${res.status}`)
+          const errData = await res.json().catch(() => ({}))
+          throw new Error(errData.message || errData.error || `Failed to fetch questions: ${res.status}`)
         }
         const data = await res.json()
-        if (mounted) {
-          setQuestions(data.questions?.length ? data.questions : FALLBACK_QUESTIONS)
+        const generated = data.questions
+        if (!Array.isArray(generated) || generated.length === 0) {
+          throw new Error("No interview questions were generated")
         }
-      } catch {
-        if (mounted) setQuestions(FALLBACK_QUESTIONS)
+        if (mounted) {
+          setQuestions(generated)
+        }
+      } catch (err) {
+        if (mounted) {
+          const msg = err instanceof Error ? err.message : "Failed to generate interview questions"
+          setQuestionError(msg)
+          setQuestions([])
+        }
       } finally {
         if (mounted) setLoadingQuestions(false)
       }
@@ -114,8 +133,6 @@ export default function InterviewSessionPage() {
   // ─── TTS via edge-tts backend ──────────────────────────────────────────────
   const speak = useCallback(async (text: string, onEnd?: () => void) => {
     sourceRef.current?.stop()
-    cancelAnimationFrame(animFrameRef.current)
-    setAvatarAmplitude(0)
 
     try {
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/tts/speak`, {
@@ -134,36 +151,19 @@ export default function InterviewSessionPage() {
       const ctx = audioCtxRef.current
       const audioBuffer = await ctx.decodeAudioData(audioData)
 
-      const analyser = ctx.createAnalyser()
-      analyser.fftSize = 256
-      analyserRef.current = analyser
-
       const source = ctx.createBufferSource()
       source.buffer = audioBuffer
-      source.connect(analyser)
-      analyser.connect(ctx.destination)
+      source.connect(ctx.destination)
       sourceRef.current = source
 
-      const dataArr = new Uint8Array(analyser.frequencyBinCount)
-      const tick = () => {
-        analyser.getByteFrequencyData(dataArr)
-        const avg = dataArr.reduce((s, v) => s + v, 0) / dataArr.length
-        setAvatarAmplitude(avg / 255)
-        animFrameRef.current = requestAnimationFrame(tick)
-      }
-
       setAvatarSpeaking(true)
-      animFrameRef.current = requestAnimationFrame(tick)
       source.start()
       source.onended = () => {
-        cancelAnimationFrame(animFrameRef.current)
         setAvatarSpeaking(false)
-        setAvatarAmplitude(0)
         onEnd?.()
       }
     } catch {
       setAvatarSpeaking(false)
-      setAvatarAmplitude(0)
       onEnd?.()
     }
   }, [])
@@ -174,7 +174,14 @@ export default function InterviewSessionPage() {
     chunksRef.current = []
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          noiseSuppression: true,
+          echoCancellation: true,
+          autoGainControl: true,
+        },
+      })
       streamRef.current = stream
 
       // Prefer WebM (Chrome) → OGG (Firefox) → default
@@ -235,7 +242,15 @@ export default function InterviewSessionPage() {
         try {
           const blob = new Blob(chunks, { type: chunks[0].type || "audio/webm" })
           const form = new FormData()
-          form.append("audio", blob, "recording.webm")
+          const mime = (blob.type || "").toLowerCase()
+          const filename = mime.includes("ogg")
+            ? "recording.ogg"
+            : mime.includes("wav")
+            ? "recording.wav"
+            : mime.includes("mp4") || mime.includes("m4a")
+            ? "recording.m4a"
+            : "recording.webm"
+          form.append("audio", blob, filename)
 
           const res = await fetch(
             `${process.env.NEXT_PUBLIC_API_URL}/api/stt/transcribe`,
@@ -294,8 +309,86 @@ export default function InterviewSessionPage() {
   const startInterview = () => {
     setQuestionIndex(0)
     setAnswers([])
+    setSaveError(null)
+    setFinalEvaluation(null)
+    setSavedInterviewId(null)
     askQuestion(0)
   }
+
+  const persistInterview = useCallback(async (finalAnswers: Answer[]) => {
+    setSaveError(null)
+    setIsSavingInterview(true)
+    try {
+      const token = await getToken()
+      const apiBase = process.env.NEXT_PUBLIC_API_URL
+      const questionList = finalAnswers.map((a) => a.question)
+      const answerList = finalAnswers.map((a) => a.transcript)
+
+      let evaluation: InterviewEvaluation | null = null
+
+      try {
+        const evalRes = await fetch(`${apiBase}/api/evaluate-interview`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            job_id: String(params.id),
+            job_title: jobTitle,
+            questions: questionList,
+            answers: answerList,
+          }),
+        })
+
+        if (evalRes.ok) {
+          evaluation = (await evalRes.json()) as InterviewEvaluation
+        }
+      } catch {
+        evaluation = null
+      }
+
+      const saveRes = await fetch(`${apiBase}/api/interviews`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          job_id: String(params.id),
+          job_title: jobTitle,
+          questions: questionList,
+          answers: answerList,
+          ai_evaluation: evaluation,
+        }),
+      })
+
+      if (!saveRes.ok) {
+        const errData = await saveRes.json().catch(() => ({}))
+        throw new Error(
+          errData?.message || errData?.error || "Could not save interview results"
+        )
+      }
+
+      const savedData = await saveRes.json()
+      const savedItem = savedData?.item
+      if (savedItem?._id) {
+        setSavedInterviewId(String(savedItem._id))
+      }
+
+      const savedEval = savedItem?.ai_evaluation as InterviewEvaluation | undefined
+      if (savedEval && typeof savedEval === "object") {
+        setFinalEvaluation(savedEval)
+      } else {
+        setFinalEvaluation(evaluation)
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Interview finished, but saving failed."
+      setSaveError(msg)
+    } finally {
+      setIsSavingInterview(false)
+    }
+  }, [getToken, params.id])
 
   const handleNext = async () => {
     // Stop mic and wait for transcript from backend
@@ -309,6 +402,7 @@ export default function InterviewSessionPage() {
     setAnswers(updated)
 
     if (questionIndex + 1 >= questions.length) {
+      void persistInterview(updated)
       setPhase("done")
     } else {
       const next = questionIndex + 1
@@ -356,7 +450,29 @@ export default function InterviewSessionPage() {
             <CheckCircle2 className="mx-auto h-14 w-14 text-green-500" />
             <h1 className="text-3xl font-bold">Interview Complete!</h1>
             <p className="text-muted-foreground">Great job! Here's a summary of your responses.</p>
+            {isSavingInterview && (
+              <p className="text-sm text-muted-foreground">Saving results and generating AI feedback...</p>
+            )}
+            {saveError && (
+              <p className="text-sm text-red-500">{saveError}</p>
+            )}
           </div>
+
+          {finalEvaluation && (
+            <div className="rounded-xl border bg-card p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI Evaluation</p>
+                  <p className="text-sm text-muted-foreground">{finalEvaluation.summary || "Interview evaluated using Gemini AI."}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-muted-foreground">Overall Score</p>
+                  <p className="text-2xl font-bold">{finalEvaluation.overall_score}/10</p>
+                  <Badge variant="secondary" className="mt-1">{finalEvaluation.overall_rating || "Good"}</Badge>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="space-y-4 rounded-xl border bg-card p-6 max-h-[60vh] overflow-y-auto">
             {answers.map((a, i) => (
@@ -372,6 +488,13 @@ export default function InterviewSessionPage() {
             <Button variant="outline" onClick={startInterview} className="gap-2">
               <RotateCcw className="h-4 w-4" /> Retry
             </Button>
+            {savedInterviewId && (
+              <Button asChild variant="outline" className="gap-2">
+                <Link href={`/dashboard/upskilling/${savedInterviewId}`}>
+                  {finalEvaluation?.upskill_topics?.length ? "View Upskill Plan" : "Create Upskill Plan"}
+                </Link>
+              </Button>
+            )}
             <Button asChild className="gap-2">
               <Link href="/dashboard/interviews">
                 <Home className="h-4 w-4" /> Back to Interviews
@@ -388,9 +511,7 @@ export default function InterviewSessionPage() {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-background p-8">
         <div className="w-full max-w-lg text-center space-y-8">
-          <div className="w-full rounded-2xl overflow-hidden bg-gradient-to-b from-slate-900 to-slate-800 border border-slate-700 shadow-2xl">
-            <AIAvatar3D isSpeaking={false} />
-          </div>
+          <InterviewAvatarCard isSpeaking={false} />
 
           <div className="space-y-3">
             <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 bg-clip-text text-transparent">
@@ -399,6 +520,8 @@ export default function InterviewSessionPage() {
             <p className="text-muted-foreground">
               {loadingQuestions ? (
                 "Analyzing candidate profile and generating dynamic questions..."
+              ) : questionError ? (
+                `Question generation failed: ${questionError}`
               ) : (
                 `I'll ask you ${questions.length} tailored questions based on your resume and the job description. Speak your answers aloud — they'll be transcribed and recorded in real time.`
               )}
@@ -413,13 +536,15 @@ export default function InterviewSessionPage() {
           <Button
             size="lg"
             onClick={startInterview}
-            disabled={loadingQuestions}
+            disabled={loadingQuestions || !!questionError || questions.length === 0}
             className="gap-2 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-10 disabled:opacity-80"
           >
             {loadingQuestions ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" /> Generating Questions…
               </>
+            ) : questionError ? (
+              <>Unable to Start Interview</>
             ) : (
               <>
                 Start Interview <ChevronRight className="h-4 w-4" />
@@ -474,9 +599,7 @@ export default function InterviewSessionPage() {
       <div className="flex flex-1 flex-col items-center gap-5 p-4 max-w-2xl mx-auto w-full">
 
         {/* Avatar */}
-        <div className="w-full rounded-2xl overflow-hidden bg-gradient-to-b from-slate-900 to-slate-800 border border-slate-700 shadow-2xl">
-          <AIAvatar3D isSpeaking={avatarSpeaking} amplitude={avatarAmplitude} />
-        </div>
+        <InterviewAvatarCard isSpeaking={avatarSpeaking} />
 
         {/* Speaking wave indicator */}
         {avatarSpeaking && (
@@ -502,6 +625,14 @@ export default function InterviewSessionPage() {
           </p>
         </div>
 
+
+        {/* Errors */}
+        {(recordingError || transcribeError) && (
+          <div className="w-full rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-500">
+            {recordingError && <p>🎙️ {recordingError}</p>}
+            {transcribeError && <p>⚙️ {transcribeError}</p>}
+          </div>
+        )}
 
         {/* Controls */}
         <div className="flex w-full items-center gap-4">

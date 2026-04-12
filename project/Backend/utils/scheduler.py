@@ -37,4 +37,4 @@ def start_scheduler():
     )
 
     _scheduler.start()
-    print("Job-fetch scheduler started")
+    print("Job-fetch scheduler started (daily 00:00 run)")

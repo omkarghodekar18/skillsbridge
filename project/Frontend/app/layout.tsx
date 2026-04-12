@@ -21,7 +21,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <ClerkProvider>
+    <ClerkProvider dynamic>
       <html lang="en" suppressHydrationWarning>
         <body className={`font-sans ${GeistSans.variable} ${GeistMono.variable} antialiased`}>
           <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>

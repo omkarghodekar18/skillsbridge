@@ -2,6 +2,7 @@ import os
 import uuid
 import json
 import re
+from datetime import datetime, timezone
 import requests
 from urllib.parse import unquote
 from utils.nlp import get_skill_extractor
@@ -65,6 +66,71 @@ cloudinary.config(
 _skill_extractor = None
 
 
+def _serialize_interview(doc):
+    if not doc:
+        return None
+    serialized = dict(doc)
+    if "_id" in serialized:
+        serialized["_id"] = str(serialized["_id"])
+    for key in ("created_at", "updated_at"):
+        if isinstance(serialized.get(key), datetime):
+            serialized[key] = serialized[key].isoformat()
+    return serialized
+
+
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _resolve_job_title(job_id):
+    if not isinstance(job_id, str) or not job_id.strip():
+        return ""
+
+    raw_id = job_id.strip()
+    decoded_id = unquote(raw_id)
+    candidates = [raw_id]
+    if decoded_id and decoded_id != raw_id:
+        candidates.append(decoded_id)
+
+    jobs_col = get_db()["jobs"]
+    job_doc = jobs_col.find_one(
+        {"job_id": {"$in": candidates}},
+        {"title": 1},
+    )
+    return (job_doc or {}).get("title") or ""
+
+
+def _ensure_interview_job_title(doc, interviews_col=None):
+    if not doc:
+        return doc
+
+    current_title = (doc.get("job_title") or "").strip()
+    if current_title:
+        return doc
+
+    resolved_title = _resolve_job_title(doc.get("job_id") or "")
+    if not resolved_title:
+        return doc
+
+    doc["job_title"] = resolved_title
+
+    if interviews_col is not None and doc.get("_id"):
+        interviews_col.update_one(
+            {"_id": doc["_id"]},
+            {
+                "$set": {
+                    "job_title": resolved_title,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+        )
+
+    return doc
+
+
 def get_extractor():
     global _skill_extractor
     if _skill_extractor is None:
@@ -80,6 +146,12 @@ with app.app_context():
         pass
     try:
         ensure_collections()
+    except Exception:
+        pass
+    try:
+        interviews_col = get_db()["interviews"]
+        interviews_col.create_index([("clerk_id", 1), ("created_at", -1)])
+        interviews_col.create_index("job_id")
     except Exception:
         pass
 
@@ -428,12 +500,404 @@ def stt_transcribe():
         return jsonify({"error": str(e)}), 500
 
 
+GEMINI_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-flash-latest",
+    "gemini-flash-lite-latest",
+]
+
 FREE_MODELS = [
     "google/gemma-3-4b-it:free",
     "meta-llama/llama-3.3-70b-instruct:free",
     "deepseek/deepseek-v2-lite-chat:free",
     "mistralai/mistral-small-3.1-24b-instruct:free",
 ]
+
+
+def evaluate_interview_payload(
+    questions,
+    answers,
+    job_title="",
+    user_skills=None,
+):
+    gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY (or GOOGLE_API_KEY) not configured")
+
+    user_skills = user_skills or []
+    qa_items = []
+    for i, question in enumerate(questions):
+        ans = ""
+        if i < len(answers) and isinstance(answers[i], str):
+            ans = answers[i]
+        qa_items.append(
+            {
+                "question_number": i + 1,
+                "question": question,
+                "answer": ans,
+            }
+        )
+
+    prompt = f"""You are an expert technical interviewer and strict evaluator.
+Evaluate the candidate's interview answers and return ONLY valid JSON.
+
+Context:
+- Job title: {job_title or 'Unknown'}
+- Candidate skills from resume: {', '.join(user_skills[:15]) if user_skills else 'Not provided'}
+
+Interview Q&A JSON:
+{json.dumps(qa_items, ensure_ascii=True)}
+
+Scoring rules:
+- Score each answer from 1 to 10.
+- Consider correctness, depth, clarity, and relevance.
+- Provide concise actionable feedback per question.
+- Keep strengths/weaknesses concrete and non-repetitive.
+
+Return JSON with this exact shape:
+{{
+  "overall_score": 0,
+  "overall_rating": "Strong|Good|Needs Work",
+  "summary": "string",
+  "per_question": [
+    {{"question": "string", "answer": "string", "score": 0, "feedback": "string"}}
+  ],
+  "strengths": ["string"],
+  "weaknesses": ["string"],
+  "upskill_topics": [
+    {{"skill": "string", "reason": "string", "resources": ["string"]}}
+  ]
+}}
+
+Important:
+- Output ONLY JSON. No markdown or commentary.
+- per_question must contain the same number of items as input questions.
+"""
+
+    last_error = None
+    for model in GEMINI_MODELS:
+        try:
+            response = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_api_key}",
+                headers={"Content-Type": "application/json"},
+                json={
+                    "contents": [{
+                        "role": "user",
+                        "parts": [{"text": prompt}],
+                    }],
+                    "generationConfig": {
+                        "temperature": 0.2,
+                        "responseMimeType": "application/json",
+                    },
+                },
+                timeout=45,
+            )
+
+            if response.status_code in (429, 500, 503):
+                try:
+                    err_msg = (
+                        response.json().get("error", {}).get("message")
+                        or response.text
+                    )
+                except Exception:
+                    err_msg = response.text
+                last_error = f"model unavailable: {model} - {str(err_msg)[:200]}"
+                continue
+
+            if response.status_code != 200:
+                last_error = response.text
+                continue
+
+            response_data = response.json()
+            candidates = response_data.get("candidates") or []
+            if not candidates:
+                last_error = "No candidates in Gemini response"
+                continue
+
+            parts = ((candidates[0] or {}).get("content") or {}).get("parts") or []
+            content = "".join(
+                str(part.get("text", "")) for part in parts if isinstance(part, dict)
+            ).strip()
+
+            if not content:
+                last_error = "Empty Gemini response"
+                continue
+
+            match = re.search(r"\{.*\}", content, re.S)
+            if not match:
+                last_error = "No JSON object in evaluation response"
+                continue
+
+            parsed = json.loads(match.group())
+            per_question = parsed.get("per_question")
+            if not isinstance(per_question, list) or len(per_question) != len(questions):
+                last_error = "Invalid per_question shape"
+                continue
+
+            cleaned_per_question = []
+            for i, item in enumerate(per_question):
+                q = questions[i]
+                a = answers[i] if i < len(answers) else ""
+                cleaned_per_question.append(
+                    {
+                        "question": str(item.get("question") or q),
+                        "answer": str(item.get("answer") or a),
+                        "score": max(1, min(10, int(round(_safe_float(item.get("score"), 5))))),
+                        "feedback": str(item.get("feedback") or ""),
+                    }
+                )
+
+            overall_score = _safe_float(parsed.get("overall_score"), 0.0)
+            if overall_score <= 0:
+                overall_score = round(
+                    sum(x["score"] for x in cleaned_per_question)
+                    / max(1, len(cleaned_per_question)),
+                    1,
+                )
+
+            result = {
+                "overall_score": round(max(1.0, min(10.0, overall_score)), 1),
+                "overall_rating": str(parsed.get("overall_rating") or "Good"),
+                "summary": str(parsed.get("summary") or ""),
+                "per_question": cleaned_per_question,
+                "strengths": [
+                    str(x) for x in (parsed.get("strengths") or []) if str(x).strip()
+                ][:6],
+                "weaknesses": [
+                    str(x) for x in (parsed.get("weaknesses") or []) if str(x).strip()
+                ][:6],
+                "upskill_topics": parsed.get("upskill_topics") or [],
+            }
+
+            return result
+
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    raise RuntimeError(last_error or "Gemini evaluation failed")
+
+
+@app.route("/api/evaluate-interview", methods=["POST", "OPTIONS"])
+@require_auth
+def evaluate_interview():
+    if request.method == "OPTIONS":
+        return "", 204
+
+    body = request.get_json(silent=True) or {}
+    questions = body.get("questions") or []
+    answers = body.get("answers") or []
+    job_title = (body.get("job_title") or "").strip()
+
+    if not isinstance(questions, list) or not isinstance(answers, list):
+        return jsonify({"error": "questions and answers must be arrays"}), 400
+
+    questions = [q.strip() for q in questions if isinstance(q, str) and q.strip()]
+    answers = [a.strip() for a in answers if isinstance(a, str)]
+
+    if not questions:
+        return jsonify({"error": "At least one question is required"}), 400
+
+    clerk_id = g.user.get("sub")
+    user = get_user_by_clerk_id(clerk_id) or {}
+    user_skills = body.get("user_skills")
+    if not isinstance(user_skills, list):
+        user_skills = user.get("skills", [])
+
+    try:
+        evaluation = evaluate_interview_payload(
+            questions=questions,
+            answers=answers,
+            job_title=job_title,
+            user_skills=user_skills,
+        )
+        return jsonify(evaluation)
+    except Exception as e:
+        return jsonify({"error": "evaluation_failed", "message": str(e)}), 503
+
+
+@app.route("/api/interviews", methods=["POST", "GET", "OPTIONS"])
+@require_auth
+def interviews_collection():
+    if request.method == "OPTIONS":
+        return "", 204
+
+    clerk_id = g.user.get("sub")
+    interviews_col = get_db()["interviews"]
+
+    if request.method == "GET":
+        try:
+            limit = max(1, min(100, int(request.args.get("limit", 20))))
+        except ValueError:
+            limit = 20
+
+        cursor = (
+            interviews_col.find({"clerk_id": clerk_id})
+            .sort("created_at", -1)
+            .limit(limit)
+        )
+
+        docs = []
+        for doc in cursor:
+            hydrated = _ensure_interview_job_title(doc, interviews_col=interviews_col)
+            docs.append(_serialize_interview(hydrated))
+        return jsonify({"items": docs, "count": len(docs)})
+
+    body = request.get_json(silent=True) or {}
+    questions = body.get("questions") or []
+    answers = body.get("answers") or []
+    job_id = (body.get("job_id") or "").strip()
+    job_title = (body.get("job_title") or "").strip()
+
+    if not isinstance(questions, list) or not isinstance(answers, list):
+        return jsonify({"error": "questions and answers must be arrays"}), 400
+
+    cleaned_questions = [q.strip() for q in questions if isinstance(q, str) and q.strip()]
+    cleaned_answers = [a.strip() for a in answers if isinstance(a, str)]
+
+    print(f"[InterviewSubmit] clerk_id={clerk_id} job_id={job_id} total_answers={len(cleaned_answers)}")
+    for i, answer in enumerate(cleaned_answers, start=1):
+        print(f"[InterviewSubmit] Q{i} transcript: {answer}")
+
+    if not cleaned_questions:
+        return jsonify({"error": "questions cannot be empty"}), 400
+
+    if not job_title and job_id:
+        job_title = _resolve_job_title(job_id)
+
+    ai_evaluation = body.get("ai_evaluation")
+    if not isinstance(ai_evaluation, dict):
+        user = get_user_by_clerk_id(clerk_id) or {}
+        try:
+            ai_evaluation = evaluate_interview_payload(
+                questions=cleaned_questions,
+                answers=cleaned_answers,
+                job_title=job_title,
+                user_skills=user.get("skills", []),
+            )
+        except Exception as e:
+            return jsonify({"error": "evaluation_failed", "message": str(e)}), 503
+
+    overall_score = _safe_float(ai_evaluation.get("overall_score"), 0.0)
+    if overall_score <= 0:
+        per_question = ai_evaluation.get("per_question") or []
+        if per_question:
+            overall_score = round(
+                sum(_safe_float(x.get("score"), 0.0) for x in per_question)
+                / len(per_question),
+                1,
+            )
+
+    now = datetime.now(timezone.utc)
+    doc = {
+        "clerk_id": clerk_id,
+        "job_id": job_id,
+        "job_title": job_title,
+        "questions": cleaned_questions,
+        "answers": cleaned_answers,
+        "ai_evaluation": ai_evaluation,
+        "score": round(overall_score, 1),
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    insert_result = interviews_col.insert_one(doc)
+    created = interviews_col.find_one({"_id": insert_result.inserted_id})
+    created = _ensure_interview_job_title(created, interviews_col=interviews_col)
+
+    return jsonify({"item": _serialize_interview(created)}), 201
+
+
+@app.route("/api/interviews/<interview_id>", methods=["GET"])
+@require_auth
+def interview_detail(interview_id):
+    clerk_id = g.user.get("sub")
+    interviews_col = get_db()["interviews"]
+
+    try:
+        oid = ObjectId(interview_id)
+    except InvalidId:
+        return jsonify({"error": "Invalid interview id"}), 400
+
+    doc = interviews_col.find_one({"_id": oid, "clerk_id": clerk_id})
+    if not doc:
+        return jsonify({"error": "Interview not found"}), 404
+
+    doc = _ensure_interview_job_title(doc, interviews_col=interviews_col)
+
+    return jsonify({"item": _serialize_interview(doc)})
+
+
+@app.route("/api/interviews/<interview_id>/upskill-plan", methods=["POST"])
+@require_auth
+def create_upskill_plan(interview_id):
+    clerk_id = g.user.get("sub")
+    interviews_col = get_db()["interviews"]
+
+    try:
+        oid = ObjectId(interview_id)
+    except InvalidId:
+        return jsonify({"error": "Invalid interview id"}), 400
+
+    doc = interviews_col.find_one({"_id": oid, "clerk_id": clerk_id})
+    if not doc:
+        return jsonify({"error": "Interview not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    force = bool(body.get("force"))
+
+    existing_eval = doc.get("ai_evaluation") if isinstance(doc.get("ai_evaluation"), dict) else {}
+    existing_topics = existing_eval.get("upskill_topics") if isinstance(existing_eval, dict) else []
+    if existing_topics and not force:
+        return jsonify({"item": _serialize_interview(doc), "generated": False})
+
+    questions = [q for q in (doc.get("questions") or []) if isinstance(q, str) and q.strip()]
+    answers = [a for a in (doc.get("answers") or []) if isinstance(a, str)]
+    job_title = (doc.get("job_title") or "").strip()
+    if not job_title:
+        job_title = _resolve_job_title(doc.get("job_id") or "")
+
+    if not questions:
+        return jsonify({"error": "No interview questions found"}), 400
+
+    user = get_user_by_clerk_id(clerk_id) or {}
+
+    try:
+        ai_evaluation = evaluate_interview_payload(
+            questions=questions,
+            answers=answers,
+            job_title=job_title,
+            user_skills=user.get("skills", []),
+        )
+    except Exception as e:
+        return jsonify({"error": "evaluation_failed", "message": str(e)}), 503
+
+    overall_score = _safe_float(ai_evaluation.get("overall_score"), 0.0)
+    if overall_score <= 0:
+        per_question = ai_evaluation.get("per_question") or []
+        if per_question:
+            overall_score = round(
+                sum(_safe_float(x.get("score"), 0.0) for x in per_question)
+                / len(per_question),
+                1,
+            )
+
+    interviews_col.update_one(
+        {"_id": oid, "clerk_id": clerk_id},
+        {
+            "$set": {
+                "ai_evaluation": ai_evaluation,
+                "score": round(overall_score, 1),
+                "job_title": job_title,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        },
+    )
+
+    updated = interviews_col.find_one({"_id": oid, "clerk_id": clerk_id})
+    updated = _ensure_interview_job_title(updated, interviews_col=interviews_col)
+    return jsonify({"item": _serialize_interview(updated), "generated": True})
 
 
 # ── OpenRouter Generate Interview Questions ────────────────────────────────

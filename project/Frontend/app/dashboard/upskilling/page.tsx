@@ -1,53 +1,36 @@
 "use client"
 
+import { useEffect, useState } from "react"
+import { useAuth } from "@clerk/nextjs"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { BookOpen, ChevronRight, Briefcase, Calendar } from "lucide-react"
+import { BookOpen, ChevronRight, Briefcase, Calendar, Loader2 } from "lucide-react"
 
 interface PlanSummary {
   id: string
   jobTitle: string
-  company: string
   date: string
   skills: string[]
-  totalTasks: number
-  doneTasks: number
+  overallScore: number
+  topicsCount: number
   color: string
 }
 
-const PLANS: PlanSummary[] = [
-  {
-    id: "1",
-    jobTitle: "Full Stack Engineer",
-    company: "StartupXYZ",
-    date: "2026-02-14",
-    skills: ["SQL & Database Design", "System Design"],
-    totalTasks: 12,
-    doneTasks: 2,
-    color: "blue",
-  },
-  {
-    id: "2",
-    jobTitle: "Frontend Developer",
-    company: "TechCorp",
-    date: "2026-02-20",
-    skills: ["CSS Performance", "Behavioral Interviewing (STAR)"],
-    totalTasks: 8,
-    doneTasks: 3,
-    color: "pink",
-  },
-  {
-    id: "3",
-    jobTitle: "Junior Software Engineer",
-    company: "GlobalFinance",
-    date: "2026-02-08",
-    skills: ["Space Complexity Analysis"],
-    totalTasks: 4,
-    doneTasks: 0,
-    color: "purple",
-  },
-]
+interface InterviewApiItem {
+  _id: string
+  job_title?: string
+  score?: number
+  created_at?: string
+  ai_evaluation?: {
+    overall_score?: number
+    upskill_topics?: Array<{
+      skill?: string
+      reason?: string
+      resources?: string[]
+    }>
+  }
+}
 
 const colorMap: Record<string, { dot: string; badge: string }> = {
   blue:   { dot: "bg-blue-500",   badge: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
@@ -56,6 +39,68 @@ const colorMap: Record<string, { dot: string; badge: string }> = {
 }
 
 export default function UpskillingListPage() {
+  const { getToken } = useAuth()
+  const [plans, setPlans] = useState<PlanSummary[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+
+    async function loadPlans() {
+      setLoading(true)
+      setError(null)
+      try {
+        const token = await getToken()
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/interviews?limit=30`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+
+        if (!res.ok) {
+          throw new Error("Failed to load plans")
+        }
+
+        const data = await res.json()
+        const mapped: PlanSummary[] = (data.items || [])
+          .map((item: InterviewApiItem, idx: number) => {
+            const topics = item.ai_evaluation?.upskill_topics || []
+            const skills = topics
+              .map((topic) => (topic.skill || "").trim())
+              .filter(Boolean)
+
+            if (skills.length === 0) {
+              return null
+            }
+
+            return {
+              id: item._id,
+              jobTitle: item.job_title || "Untitled Role",
+              date: item.created_at || new Date().toISOString(),
+              skills,
+              overallScore: Number(item.ai_evaluation?.overall_score ?? item.score ?? 0),
+              topicsCount: topics.length,
+              color: ["blue", "pink", "purple"][idx % 3],
+            }
+          })
+          .filter((item: PlanSummary | null): item is PlanSummary => item !== null)
+
+        if (active) {
+          setPlans(mapped)
+        }
+      } catch {
+        if (active) setError("Could not load upskilling plans")
+      } finally {
+        if (active) setLoading(false)
+      }
+    }
+
+    void loadPlans()
+
+    return () => {
+      active = false
+    }
+  }, [getToken])
+
   return (
     <main className="min-h-screen bg-background p-8">
       <div className="mx-auto max-w-3xl">
@@ -66,7 +111,23 @@ export default function UpskillingListPage() {
           </p>
         </div>
 
-        {PLANS.length === 0 ? (
+        {loading && (
+          <Card>
+            <CardContent className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading upskilling plans...
+            </CardContent>
+          </Card>
+        )}
+
+        {error && !loading && (
+          <Card>
+            <CardContent className="py-16 text-center text-sm text-red-500">
+              {error}
+            </CardContent>
+          </Card>
+        )}
+
+        {!loading && !error && plans.length === 0 ? (
           <Card>
             <CardContent className="flex flex-col items-center justify-center py-16 text-center">
               <BookOpen className="h-12 w-12 mb-4 text-muted-foreground/40" />
@@ -76,11 +137,14 @@ export default function UpskillingListPage() {
               </p>
             </CardContent>
           </Card>
-        ) : (
+        ) : null}
+
+        {!loading && !error && plans.length > 0 ? (
           <div className="space-y-4">
-            {PLANS.map((plan) => {
+            {plans.map((plan) => {
               const c = colorMap[plan.color]
-              const pct = Math.round((plan.doneTasks / plan.totalTasks) * 100)
+              const normalizedScore = Math.max(0, Math.min(10, Number.isFinite(plan.overallScore) ? plan.overallScore : 0))
+              const pct = Math.round((normalizedScore / 10) * 100)
               const dateLabel = new Date(plan.date).toLocaleDateString("en-IN", {
                 day: "numeric", month: "short", year: "numeric",
               })
@@ -94,7 +158,7 @@ export default function UpskillingListPage() {
                           <Briefcase className="h-5 w-5 shrink-0 text-muted-foreground" />
                           <div className="min-w-0">
                             <CardTitle className="text-base">{plan.jobTitle}</CardTitle>
-                            <CardDescription>{plan.company}</CardDescription>
+                            <CardDescription>Interview-based learning plan</CardDescription>
                           </div>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
@@ -124,7 +188,7 @@ export default function UpskillingListPage() {
                           />
                         </div>
                         <span className="text-xs text-muted-foreground shrink-0">
-                          {plan.doneTasks}/{plan.totalTasks} tasks · {pct}%
+                          Score {normalizedScore.toFixed(1)}/10 · {plan.topicsCount} topics
                         </span>
                       </div>
                     </CardContent>
@@ -133,7 +197,7 @@ export default function UpskillingListPage() {
               )
             })}
           </div>
-        )}
+        ) : null}
       </div>
     </main>
   )
