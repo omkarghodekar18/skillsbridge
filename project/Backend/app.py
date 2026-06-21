@@ -169,7 +169,7 @@ with app.app_context():
 
 @app.route("/", methods=["GET"])
 def hello_world():
-    return "hello world"
+    return "hello from omkar ghodekar"
 
 
 @app.route("/api/jobs", methods=["GET"])
