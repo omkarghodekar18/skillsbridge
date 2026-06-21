@@ -6,18 +6,26 @@ from datetime import datetime, timezone
 import requests
 from urllib.parse import unquote
 from utils.nlp import get_skill_extractor
+# pyrefly: ignore [missing-import]
 from flask import Flask, jsonify, g, request
 from flask_cors import CORS
+# pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 from utils.tts_service import generate_speech_bytes
 from utils.stt_service import transcribe_audio
+# pyrefly: ignore [missing-import]
 from flask import Response
 from utils.scheduler import start_scheduler
+# pyrefly: ignore [missing-import]
 import cloudinary
 from database import get_db
+# pyrefly: ignore [missing-import]
 from bson.objectid import ObjectId
+# pyrefly: ignore [missing-import]
 from bson.errors import InvalidId
+# pyrefly: ignore [missing-import]
 import cloudinary.uploader
+# pyrefly: ignore [missing-import]
 from pdfminer.high_level import extract_text
 from auth import require_auth
 from models.user import (
@@ -156,7 +164,7 @@ with app.app_context():
         pass
 
 # Start background job-fetch scheduler
-start_scheduler()
+# start_scheduler()
 
 
 @app.route("/", methods=["GET"])
@@ -508,10 +516,10 @@ GEMINI_MODELS = [
 ]
 
 FREE_MODELS = [
-    "google/gemma-3-4b-it:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "deepseek/deepseek-v2-lite-chat:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
+    "openai/gpt-4.1",
+    # "meta-llama/llama-3.3-70b-instruct:free",
+    # "deepseek/deepseek-v2-lite-chat:free",
+    # "mistralai/mistral-small-3.1-24b-instruct:free",
 ]
 
 
@@ -960,8 +968,10 @@ OUTPUT FORMAT:
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.3,
+                    "max_tokens": 1500,
+
                 },
-                timeout=30,
+                timeout=60,
             )
 
             if response.status_code == 429:

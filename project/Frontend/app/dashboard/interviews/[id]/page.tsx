@@ -62,32 +62,32 @@ export default function InterviewSessionPage() {
   const jobTitle = searchParams.get("title") || ""
   const { getToken } = useAuth()
 
-  const [questions, setQuestions]               = useState<string[]>([])
+  const [questions, setQuestions] = useState<string[]>([])
   const [loadingQuestions, setLoadingQuestions] = useState(true)
-  const [questionError, setQuestionError]       = useState<string | null>(null)
-  const [phase, setPhase]                       = useState<Phase>("intro")
-  const [questionIndex, setQuestionIndex]       = useState(0)
-  const [transcript, setTranscript]             = useState("")
-  const [isMuted, setIsMuted]                   = useState(false)
-  const [answers, setAnswers]                   = useState<Answer[]>([])
-  const [avatarSpeaking, setAvatarSpeaking]     = useState(false)
-  const [isRecording, setIsRecording]           = useState(false)
-  const [isTranscribing, setIsTranscribing]     = useState(false)
+  const [questionError, setQuestionError] = useState<string | null>(null)
+  const [phase, setPhase] = useState<Phase>("intro")
+  const [questionIndex, setQuestionIndex] = useState(0)
+  const [transcript, setTranscript] = useState("")
+  const [isMuted, setIsMuted] = useState(false)
+  const [answers, setAnswers] = useState<Answer[]>([])
+  const [avatarSpeaking, setAvatarSpeaking] = useState(false)
+  const [isRecording, setIsRecording] = useState(false)
+  const [isTranscribing, setIsTranscribing] = useState(false)
   const [isSavingInterview, setIsSavingInterview] = useState(false)
-  const [saveError, setSaveError]               = useState<string | null>(null)
-  const [recordingError, setRecordingError]     = useState<string | null>(null)
-  const [transcribeError, setTranscribeError]   = useState<string | null>(null)
-  const [finalEvaluation, setFinalEvaluation]   = useState<InterviewEvaluation | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [recordingError, setRecordingError] = useState<string | null>(null)
+  const [transcribeError, setTranscribeError] = useState<string | null>(null)
+  const [finalEvaluation, setFinalEvaluation] = useState<InterviewEvaluation | null>(null)
   const [savedInterviewId, setSavedInterviewId] = useState<string | null>(null)
 
-  const audioCtxRef    = useRef<AudioContext | null>(null)
-  const sourceRef      = useRef<AudioBufferSourceNode | null>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const sourceRef = useRef<AudioBufferSourceNode | null>(null)
   // MediaRecorder refs
-  const mediaRecRef    = useRef<MediaRecorder | null>(null)
-  const chunksRef      = useRef<Blob[]>([])
-  const streamRef      = useRef<MediaStream | null>(null)
+  const mediaRecRef = useRef<MediaRecorder | null>(null)
+  const chunksRef = useRef<Blob[]>([])
+  const streamRef = useRef<MediaStream | null>(null)
   // Mirrors `transcript` so handleNext can read the live typed value synchronously
-  const transcriptRef  = useRef<string>("")
+  const transcriptRef = useRef<string>("")
 
   // ─── Fetch AI questions on mount ───────────────────────────────────────────
   useEffect(() => {
@@ -188,8 +188,8 @@ export default function InterviewSessionPage() {
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
         : MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
-        ? "audio/ogg;codecs=opus"
-        : ""
+          ? "audio/ogg;codecs=opus"
+          : ""
 
       const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
       mediaRecRef.current = recorder
@@ -246,10 +246,10 @@ export default function InterviewSessionPage() {
           const filename = mime.includes("ogg")
             ? "recording.ogg"
             : mime.includes("wav")
-            ? "recording.wav"
-            : mime.includes("mp4") || mime.includes("m4a")
-            ? "recording.m4a"
-            : "recording.webm"
+              ? "recording.wav"
+              : mime.includes("mp4") || mime.includes("m4a")
+                ? "recording.m4a"
+                : "recording.webm"
           form.append("audio", blob, filename)
 
           const res = await fetch(
@@ -671,10 +671,10 @@ export default function InterviewSessionPage() {
           {isTranscribing
             ? "⏳ Processing your answer…"
             : isRecording && !isMuted
-            ? "🔴 Recording — click Next when done"
-            : phase === "ai-speaking"
-            ? "🔊 AI is speaking, please wait"
-            : "—"}
+              ? "🔴 Recording — click Next when done"
+              : phase === "ai-speaking"
+                ? "🔊 AI is speaking, please wait"
+                : "—"}
         </p>
       </div>
     </div>

@@ -19,10 +19,10 @@ const VISEME_CYCLE = [
 function AvatarModel({ isSpeaking, amplitude }: { isSpeaking: boolean; amplitude: number }) {
   const { scene } = useGLTF(AVATAR_URL)
   const morphMeshes = useRef<THREE.SkinnedMesh[]>([])
-  const visemeIdx   = useRef(0)
+  const visemeIdx = useRef(0)
   const visemeTimer = useRef(0)
-  const blinkTimer  = useRef(Math.random() * 2)
-  const nextBlink   = useRef(2 + Math.random() * 3)
+  const blinkTimer = useRef(Math.random() * 2)
+  const nextBlink = useRef(2 + Math.random() * 3)
 
   useEffect(() => {
     const found: THREE.SkinnedMesh[] = []
@@ -43,7 +43,7 @@ function AvatarModel({ isSpeaking, amplitude }: { isSpeaking: boolean; amplitude
     const primary = meshes[0]
     if (!primary.morphTargetInfluences || !primary.morphTargetDictionary) return
     const dict = primary.morphTargetDictionary
-    const inf  = primary.morphTargetInfluences
+    const inf = primary.morphTargetInfluences
 
     // ── Real amplitude-driven lip sync ────────────────────────────────────
     // amplitude = 0-1 from Web Audio AnalyserNode (or 0 when fallback TTS used)
@@ -70,14 +70,14 @@ function AvatarModel({ isSpeaking, amplitude }: { isSpeaking: boolean; amplitude
     blinkTimer.current += delta
     if (blinkTimer.current >= nextBlink.current) {
       blinkTimer.current = 0
-      nextBlink.current  = 2 + Math.random() * 4
+      nextBlink.current = 2 + Math.random() * 4
       for (const mesh of meshes) {
         const d = mesh.morphTargetDictionary; const i = mesh.morphTargetInfluences
         if (!d || !i) continue
-        if (d["eyeBlinkLeft"]  !== undefined) i[d["eyeBlinkLeft"]]  = 1
+        if (d["eyeBlinkLeft"] !== undefined) i[d["eyeBlinkLeft"]] = 1
         if (d["eyeBlinkRight"] !== undefined) i[d["eyeBlinkRight"]] = 1
         setTimeout(() => {
-          if (d["eyeBlinkLeft"]  !== undefined) i[d["eyeBlinkLeft"]]  = 0
+          if (d["eyeBlinkLeft"] !== undefined) i[d["eyeBlinkLeft"]] = 0
           if (d["eyeBlinkRight"] !== undefined) i[d["eyeBlinkRight"]] = 0
         }, 120)
       }
@@ -137,9 +137,9 @@ export function AIAvatar3D({ isSpeaking, amplitude = 0 }: { isSpeaking: boolean;
           />
 
           <ambientLight intensity={0.8} />
-          <directionalLight position={[-1.5, 2, 2]}  intensity={1.8} color="#fff8f0" />
-          <directionalLight position={[2, 1, 1]}      intensity={0.6} color="#c7d2fe" />
-          <directionalLight position={[0, 0.5, -2]}   intensity={0.3} color="#818cf8" />
+          <directionalLight position={[-1.5, 2, 2]} intensity={1.8} color="#fff8f0" />
+          <directionalLight position={[2, 1, 1]} intensity={0.6} color="#c7d2fe" />
+          <directionalLight position={[0, 0.5, -2]} intensity={0.3} color="#818cf8" />
 
           <AvatarModel isSpeaking={isSpeaking} amplitude={amplitude} />
           <Environment preset="studio" />
@@ -147,4 +147,5 @@ export function AIAvatar3D({ isSpeaking, amplitude = 0 }: { isSpeaking: boolean;
       </Suspense>
     </div>
   )
+}
 }

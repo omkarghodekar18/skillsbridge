@@ -3,7 +3,9 @@ Background scheduler – runs fetch_jobs() every day at midnight (00:00)
 in a separate daemon thread so the main Flask thread is never blocked.
 """
 
+# pyrefly: ignore [missing-import]
 from apscheduler.schedulers.background import BackgroundScheduler
+# pyrefly: ignore [missing-import]
 from apscheduler.triggers.cron import CronTrigger
 
 _scheduler = BackgroundScheduler(daemon=True)
