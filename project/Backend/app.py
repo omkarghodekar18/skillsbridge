@@ -50,7 +50,7 @@ load_dotenv()
 app = Flask(__name__)
 
 # CORS
-cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000", "https://skillsbridge-tawny.vercel.app").split(",")
 CORS(app, origins=cors_origins, supports_credentials=True)
 
 # ── Resume uploads folder ────────────────────────────────────────────────────
