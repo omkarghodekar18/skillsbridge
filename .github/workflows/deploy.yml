@@ -10,15 +10,55 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy to EC2
+      - name: Debug Secret Exists
+        run: |
+          if [ -z "$SSH_KEY" ]; then
+            echo "❌ SSH key secret is empty"
+            exit 1
+          fi
+
+          echo "✅ SSH key secret exists"
+          echo "Length: ${#SSH_KEY}"
+
+          echo "First line:"
+          echo "$SSH_KEY" | head -n 1
+
+          echo "Last line:"
+          echo "$SSH_KEY" | tail -n 1
+        env:
+          SSH_KEY: ${{ secrets.OMKAR }}
+
+      - name: Test SSH Connection
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.OMKAR }}
           script: |
+            echo "Connected successfully"
+            whoami
+            pwd
+            hostname
+
+      - name: Deploy
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.OMKAR }}
+          script: |
+            set -e
+
             cd /home/ubuntu/skillsbridge/project/Backend
+
             git pull origin main
+
             source venv/bin/activate
+
+            mkdir -p ~/pip-tmp
+
             TMPDIR=~/pip-tmp pip install -r requirements.txt
+
             sudo systemctl restart flaskapp
+
+            sudo systemctl status flaskapp --no-pager
