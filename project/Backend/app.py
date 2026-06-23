@@ -50,7 +50,9 @@ load_dotenv()
 app = Flask(__name__)
 
 # CORS
-cors_origins = os.getenv("CORS_ORIGINS", "https://skillsbridge-tawny.vercel.app").split(",")
+# cors_origins = os.getenv("CORS_ORIGINS", "https://skillsbridge-tawny.vercel.app").split(",")
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+
 CORS(app, origins=cors_origins, supports_credentials=True)
 
 # ── Resume uploads folder ────────────────────────────────────────────────────
@@ -908,36 +910,14 @@ def create_upskill_plan(interview_id):
     return jsonify({"item": _serialize_interview(updated), "generated": True})
 
 
-# ── OpenRouter Generate Interview Questions ────────────────────────────────
-@app.route("/api/ask", methods=["POST", "OPTIONS"])
-@require_auth
-def ask_gemma():
-    # ── CORS preflight ─────────────────────────────────────────────────────
-    if request.method == "OPTIONS":
-        return "", 204
+# ── Question Generation Functions ──────────────────────────────────────────
+# Two interchangeable functions for generating interview questions.
+# Swap the function called in the /api/ask route below to switch providers.
 
-    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-    if not OPENROUTER_API_KEY:
-        return jsonify({"error": "OPENROUTER_API_KEY not configured"}), 500
 
-    # ── Fetch User ─────────────────────────────────────────────────────────
-    clerk_id = g.user.get("sub")
-    user = get_user_by_clerk_id(clerk_id)
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-
-    skills = user.get("skills", [])
-    if not skills:
-        return jsonify(
-            {"error": "No skills found. Please upload your resume first."}
-        ), 400
-
-    # Use up to 8 skills to keep the prompt focused
-    skills_sample = skills
-    skills_str = ", ".join(skills_sample)
-
-    # ── Prompt ─────────────────────────────────────────────────────────────
-    prompt = f"""You are a technical interviewer. Generate EXACTLY 5 technical questions. Consider only technical skills and frameworks for the question: 
+def _build_question_prompt(skills_str):
+    """Build the common question-generation prompt."""
+    return f"""You are a technical interviewer. Generate EXACTLY 5 technical questions. Consider only technical skills and frameworks for the question: 
     2 CS Fundamental questions from (OOP, DBMS, OS, CNS)
     2 technical questions from technical skills and frameworks
     1 question behavioural question
@@ -953,7 +933,97 @@ CANDIDATE SKILLS: {skills_str}
 OUTPUT FORMAT:
 ["Question 1?", "Question 2?", "Question 3?", "Question 4?", "Question 5?"]"""
 
-    # Call OpenRouter (try models in order, skip on 429)
+
+def generate_questions_gemini(skills_str):
+    """Generate interview questions using Google Gemini API."""
+    gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY (or GOOGLE_API_KEY) not configured")
+
+    prompt = _build_question_prompt(skills_str)
+
+    print("Gemini question generation started")
+
+    last_error = None
+    for model in GEMINI_MODELS:
+        try:
+            response = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_api_key}",
+                headers={"Content-Type": "application/json"},
+                json={
+                    "contents": [{
+                        "role": "user",
+                        "parts": [{"text": prompt}],
+                    }],
+                    "generationConfig": {
+                        "temperature": 0.3,
+                        "responseMimeType": "application/json",
+                    },
+                },
+                timeout=45,
+            )
+
+            if response.status_code in (429, 500, 503):
+                try:
+                    err_msg = (
+                        response.json().get("error", {}).get("message")
+                        or response.text
+                    )
+                except Exception:
+                    err_msg = response.text
+                last_error = f"model unavailable: {model} - {str(err_msg)[:200]}"
+                continue
+
+            if response.status_code != 200:
+                last_error = response.text
+                continue
+
+            response_data = response.json()
+            candidates = response_data.get("candidates") or []
+            if not candidates:
+                last_error = "No candidates in Gemini response"
+                continue
+
+            parts = ((candidates[0] or {}).get("content") or {}).get("parts") or []
+            content = "".join(
+                str(part.get("text", "")) for part in parts if isinstance(part, dict)
+            ).strip()
+
+            if not content:
+                last_error = "Empty Gemini response"
+                continue
+
+            # Extract JSON array from response
+            match = re.search(r"\[.*\]", content, re.S)
+            if not match:
+                last_error = "No JSON array in Gemini response"
+                continue
+
+            questions = json.loads(match.group())
+            if not isinstance(questions, list) or len(questions) == 0:
+                last_error = "Invalid question format from Gemini"
+                continue
+
+            return questions[:5]
+
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    raise RuntimeError(last_error or "All Gemini models unavailable")
+
+
+def generate_questions_openrouter(skills_str):
+    """Generate interview questions using OpenRouter API."""
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("OPENROUTER_API_KEY not configured")
+
+    prompt = _build_question_prompt(skills_str)
+
+    print("Open router started question generation started")
+
+
     last_error = None
     for model in FREE_MODELS:
         try:
@@ -969,42 +1039,72 @@ OUTPUT FORMAT:
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.3,
                     "max_tokens": 1500,
-
                 },
                 timeout=60,
             )
 
             if response.status_code == 429:
                 last_error = "rate_limited"
-                continue  # try next model
+                continue
 
             if response.status_code != 200:
                 last_error = response.text
-                continue  # try next model
+                continue
 
             content = response.json()["choices"][0]["message"]["content"].strip()
 
             # Extract JSON array from response
             match = re.search(r"\[.*\]", content, re.S)
             if not match:
-                last_error = "No JSON array in AI response"
+                last_error = "No JSON array in OpenRouter response"
                 continue
 
             questions = json.loads(match.group())
             if not isinstance(questions, list) or len(questions) == 0:
-                last_error = "Invalid question format"
+                last_error = "Invalid question format from OpenRouter"
                 continue
 
-            return jsonify({"questions": questions[:5]})
+            return questions[:5]
 
         except Exception as e:
             last_error = str(e)
             continue
 
-    # All models exhausted
-    return jsonify(
-        {"error": "rate_limited", "message": last_error or "All models unavailable"}
-    ), 503
+    raise RuntimeError(last_error or "All OpenRouter models unavailable")
+
+
+# ── Generate Interview Questions Endpoint ──────────────────────────────────
+@app.route("/api/ask", methods=["POST", "OPTIONS"])
+@require_auth
+def ask_gemma():
+    # ── CORS preflight ─────────────────────────────────────────────────────
+    if request.method == "OPTIONS":
+        return "", 204
+
+    # ── Fetch User ─────────────────────────────────────────────────────────
+    clerk_id = g.user.get("sub")
+    user = get_user_by_clerk_id(clerk_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    skills = user.get("skills", [])
+    if not skills:
+        return jsonify(
+            {"error": "No skills found. Please upload your resume first."}
+        ), 400
+
+    skills_str = ", ".join(skills)
+
+    # ── Generate questions ─────────────────────────────────────────────────
+    # ✅ SWAP HERE: change to generate_questions_openrouter(skills_str)
+    #    to use OpenRouter instead of Gemini.
+    try:
+        questions = generate_questions_gemini(skills_str)
+        return jsonify({"questions": questions})
+    except Exception as e:
+        return jsonify(
+            {"error": "generation_failed", "message": str(e)}
+        ), 503
 
 
 # ── Run Server ─────────────────────────────────────────────────────────────
