@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   Home,
   Loader2,
+  StopCircle,
 } from "lucide-react"
 import Link from "next/link"
 
@@ -411,6 +412,23 @@ export default function InterviewSessionPage() {
     }
   }
 
+  const handleEndInterview = async () => {
+    // Stop recording and transcribe current answer
+    const finalTranscript = await stopAndTranscribe()
+
+    // Save current answer if user was in the middle of answering
+    const current: Answer = {
+      question: questions[questionIndex],
+      transcript: finalTranscript.trim() || "(no answer recorded)",
+    }
+    const updated = [...answers, current]
+    setAnswers(updated)
+
+    // Persist only the attempted questions and move to done
+    void persistInterview(updated)
+    setPhase("done")
+  }
+
   const toggleMute = () => {
     setIsMuted((m) => {
       if (!m) {
@@ -439,7 +457,8 @@ export default function InterviewSessionPage() {
     }
   }, [])
 
-  const progress = Math.round((questionIndex / Math.max(1, questions.length)) * 100)
+  const progress = Math.round(((questionIndex + (phase === "done" ? 0 : 0)) / Math.max(1, questions.length)) * 100)
+  const difficultyLabel = questionIndex < 25 ? "Easy" : questionIndex < 50 ? "Medium" : questionIndex < 75 ? "Hard" : "Expert"
 
   // ─── Done phase ────────────────────────────────────────────────────────────
   if (phase === "done") {
@@ -449,7 +468,7 @@ export default function InterviewSessionPage() {
           <div className="text-center space-y-2">
             <CheckCircle2 className="mx-auto h-14 w-14 text-green-500" />
             <h1 className="text-3xl font-bold">Interview Complete!</h1>
-            <p className="text-muted-foreground">Great job! Here's a summary of your responses.</p>
+            <p className="text-muted-foreground">Great job! You answered {answers.length} out of {questions.length} questions.</p>
             {isSavingInterview && (
               <p className="text-sm text-muted-foreground">Saving results and generating AI feedback...</p>
             )}
@@ -519,17 +538,18 @@ export default function InterviewSessionPage() {
             </h1>
             <p className="text-muted-foreground">
               {loadingQuestions ? (
-                "Analyzing candidate profile and generating dynamic questions..."
+                "Analyzing your resume and job description to generate a comprehensive question bank. This may take a moment..."
               ) : questionError ? (
                 `Question generation failed: ${questionError}`
               ) : (
-                `I'll ask you ${questions.length} tailored questions based on your resume and the job description. Speak your answers aloud — they'll be transcribed and recorded in real time.`
+                `${questions.length} questions prepared — starting easy and getting progressively harder. End the interview whenever you feel ready. Only your attempted answers will be evaluated.`
               )}
             </p>
             <div className="flex justify-center flex-wrap gap-2">
               <Badge variant="secondary">🎙 Voice answers</Badge>
               <Badge variant="secondary">📝 Live transcript</Badge>
-              <Badge variant="secondary">🤫 Your own pace</Badge>
+              <Badge variant="secondary">📈 Easy → Expert</Badge>
+              <Badge variant="secondary">🛑 End anytime</Badge>
             </div>
           </div>
 
@@ -574,8 +594,14 @@ export default function InterviewSessionPage() {
         </Link>
         <div className="flex items-center gap-3">
           <span className="text-sm text-muted-foreground">
-            Question {questionIndex + 1} / {questions.length}
+            Q {questionIndex + 1} / {questions.length}
           </span>
+          <Badge
+            variant="outline"
+            className="text-xs"
+          >
+            {difficultyLabel}
+          </Badge>
           <Badge
             variant={phase === "ai-speaking" ? "default" : "secondary"}
             className="text-xs"
@@ -665,6 +691,20 @@ export default function InterviewSessionPage() {
               <>Next Question <ChevronRight className="h-4 w-4" /></>
             )}
           </Button>
+
+          {/* End Interview early button */}
+          {questionIndex + 1 < questions.length && (
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-12 w-12 rounded-full shrink-0 border-red-500/50 text-red-500 hover:bg-red-500/10 hover:text-red-600"
+              onClick={handleEndInterview}
+              disabled={phase === "ai-speaking" || isTranscribing}
+              title="End Interview"
+            >
+              <StopCircle className="h-5 w-5" />
+            </Button>
+          )}
         </div>
 
         <p className="text-xs text-muted-foreground text-center -mt-2">

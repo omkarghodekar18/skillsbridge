@@ -912,38 +912,70 @@ def create_upskill_plan(interview_id):
 
 # ── Question Generation Functions ──────────────────────────────────────────
 # Two interchangeable functions for generating interview questions.
+# Generates 100 questions in 4 batches (easy → medium → hard → expert),
+# based on both resume skills AND job description.
 # Swap the function called in the /api/ask route below to switch providers.
 
+DIFFICULTY_BATCHES = [
+    {
+        "level": "easy",
+        "batch_size": 25,
+        "description": "basic and foundational",
+        "category_mix": "10 CS Fundamentals (OOP concepts, DBMS basics, OS basics, CN basics), 15 technical skills & frameworks (definitions, syntax, basic usage, simple comparisons)",
+    },
+    {
+        "level": "medium",
+        "batch_size": 25,
+        "description": "intermediate",
+        "category_mix": "8 CS Fundamentals (algorithms, data structures, design patterns, normalization, indexing), 17 technical skills & frameworks (how things work internally, comparisons, trade-offs, middleware, state management)",
+    },
+    {
+        "level": "hard",
+        "batch_size": 25,
+        "description": "advanced and in-depth",
+        "category_mix": "7 CS Fundamentals (system design, concurrency, advanced OS/networking, memory management), 18 technical skills & frameworks (deep internals, optimization, edge cases, advanced patterns, caching, security)",
+    },
+    {
+        "level": "expert",
+        "batch_size": 25,
+        "description": "expert-level and challenging",
+        "category_mix": "7 CS Fundamentals (distributed systems, advanced algorithms, CAP theorem, consensus protocols, security), 18 technical skills & frameworks (architecture decisions, performance tuning, cutting-edge features, scaling strategies, low-level internals)",
+    },
+]
 
-def _build_question_prompt(skills_str):
-    """Build the common question-generation prompt."""
-    return f"""You are a technical interviewer. Generate EXACTLY 5 technical questions. Consider only technical skills and frameworks for the question: 
-    2 CS Fundamental questions from (OOP, DBMS, OS, CNS)
-    2 technical questions from technical skills and frameworks
-    1 question behavioural question
+
+def _build_batch_question_prompt(skills_str, job_description, batch):
+    """Build a question-generation prompt for a specific difficulty batch."""
+    jd_section = f"\nJOB DESCRIPTION:\n{job_description[:3000]}" if job_description else ""
+
+    return f"""You are an expert technical interviewer conducting a comprehensive interview.
+Generate EXACTLY {batch['batch_size']} {batch['description']} interview questions.
+
+The questions should be {batch['level']}-level difficulty.
+
+Category distribution for this batch:
+{batch['category_mix']}
+
 RULES:
-- Questions must be short and conceptual, like textbook questions (e.g., "What is a Promise in JavaScript?", "What does the virtual DOM do in React?", "Explain the difference between SQL and NoSQL.")
-- Do NOT ask scenario-based, project-based, or behavioural questions
-- Do NOT mention any job description or job role
-- Cover different skills — do not ask multiple questions about the same topic
-- OUTPUT ONLY A VALID JSON ARRAY of exactly 5 question strings, with no extra text before or after
+- ALL questions must be purely TECHNICAL — about concepts, theory, code, and implementation
+- Do NOT generate any behavioral, scenario-based, situational, or personality questions
+- Do NOT ask questions like "Tell me about yourself", "Describe a time when...", "How do you handle..."
+- Questions must be relevant to the candidate's skills AND the job description
+- Questions should be clear, concise, and answerable in 1-3 minutes each
+- Order questions from slightly easier to slightly harder WITHIN this batch
+- Cover DIFFERENT topics — do not repeat the same concept across questions
+- Be specific (e.g., "Explain how React's reconciliation algorithm works" NOT "Tell me about React")
+- OUTPUT ONLY A VALID JSON ARRAY of exactly {batch['batch_size']} question strings, with no extra text before or after
 
 CANDIDATE SKILLS: {skills_str}
+{jd_section}
 
 OUTPUT FORMAT:
-["Question 1?", "Question 2?", "Question 3?", "Question 4?", "Question 5?"]"""
+["Question 1?", "Question 2?", ..., "Question {batch['batch_size']}?"]"""
 
 
-def generate_questions_gemini(skills_str):
-    """Generate interview questions using Google Gemini API."""
-    gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not gemini_api_key:
-        raise RuntimeError("GEMINI_API_KEY (or GOOGLE_API_KEY) not configured")
-
-    prompt = _build_question_prompt(skills_str)
-
-    print("Gemini question generation started")
-
+def _call_gemini_for_batch(prompt, gemini_api_key):
+    """Make a single Gemini API call and return parsed questions list."""
     last_error = None
     for model in GEMINI_MODELS:
         try:
@@ -956,11 +988,11 @@ def generate_questions_gemini(skills_str):
                         "parts": [{"text": prompt}],
                     }],
                     "generationConfig": {
-                        "temperature": 0.3,
+                        "temperature": 0.4,
                         "responseMimeType": "application/json",
                     },
                 },
-                timeout=45,
+                timeout=60,
             )
 
             if response.status_code in (429, 500, 503):
@@ -993,7 +1025,6 @@ def generate_questions_gemini(skills_str):
                 last_error = "Empty Gemini response"
                 continue
 
-            # Extract JSON array from response
             match = re.search(r"\[.*\]", content, re.S)
             if not match:
                 last_error = "No JSON array in Gemini response"
@@ -1004,43 +1035,34 @@ def generate_questions_gemini(skills_str):
                 last_error = "Invalid question format from Gemini"
                 continue
 
-            return questions[:5]
+            return questions
 
         except Exception as e:
             last_error = str(e)
             continue
 
-    raise RuntimeError(last_error or "All Gemini models unavailable")
+    raise RuntimeError(last_error or "All Gemini models unavailable for batch")
 
 
-def generate_questions_openrouter(skills_str):
-    """Generate interview questions using OpenRouter API."""
-    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-    if not OPENROUTER_API_KEY:
-        raise RuntimeError("OPENROUTER_API_KEY not configured")
-
-    prompt = _build_question_prompt(skills_str)
-
-    print("Open router started question generation started")
-
-
+def _call_openrouter_for_batch(prompt, api_key):
+    """Make a single OpenRouter API call and return parsed questions list."""
     last_error = None
     for model in FREE_MODELS:
         try:
             response = requests.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Authorization": f"Bearer {api_key}",
                     "HTTP-Referer": "http://localhost:3000",
                     "X-Title": "SkillsBridge",
                 },
                 json={
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
-                    "max_tokens": 1500,
+                    "temperature": 0.4,
+                    "max_tokens": 4000,
                 },
-                timeout=60,
+                timeout=90,
             )
 
             if response.status_code == 429:
@@ -1053,7 +1075,6 @@ def generate_questions_openrouter(skills_str):
 
             content = response.json()["choices"][0]["message"]["content"].strip()
 
-            # Extract JSON array from response
             match = re.search(r"\[.*\]", content, re.S)
             if not match:
                 last_error = "No JSON array in OpenRouter response"
@@ -1064,13 +1085,71 @@ def generate_questions_openrouter(skills_str):
                 last_error = "Invalid question format from OpenRouter"
                 continue
 
-            return questions[:5]
+            return questions
 
         except Exception as e:
             last_error = str(e)
             continue
 
-    raise RuntimeError(last_error or "All OpenRouter models unavailable")
+    raise RuntimeError(last_error or "All OpenRouter models unavailable for batch")
+
+
+def generate_questions_gemini(skills_str, job_description=""):
+    """Generate ~100 interview questions using Google Gemini API in 4 difficulty batches."""
+    gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY (or GOOGLE_API_KEY) not configured")
+
+    print("[QuestionGen] Gemini: starting 4-batch generation (100 questions)")
+
+    all_questions = []
+    for i, batch in enumerate(DIFFICULTY_BATCHES):
+        print(f"[QuestionGen] Gemini: generating batch {i + 1}/4 ({batch['level']})...")
+        prompt = _build_batch_question_prompt(skills_str, job_description, batch)
+        try:
+            batch_questions = _call_gemini_for_batch(prompt, gemini_api_key)
+            # Ensure we only take strings
+            batch_questions = [str(q) for q in batch_questions if isinstance(q, str) and q.strip()]
+            all_questions.extend(batch_questions[:batch["batch_size"]])
+            print(f"[QuestionGen] Gemini: batch {i + 1} returned {len(batch_questions)} questions")
+        except Exception as e:
+            print(f"[QuestionGen] Gemini: batch {i + 1} ({batch['level']}) failed: {e}")
+            # Continue with other batches even if one fails
+            continue
+
+    if not all_questions:
+        raise RuntimeError("All Gemini question generation batches failed")
+
+    print(f"[QuestionGen] Gemini: total questions generated = {len(all_questions)}")
+    return all_questions
+
+
+def generate_questions_openrouter(skills_str, job_description=""):
+    """Generate ~100 interview questions using OpenRouter API in 4 difficulty batches."""
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY not configured")
+
+    print("[QuestionGen] OpenRouter: starting 4-batch generation (100 questions)")
+
+    all_questions = []
+    for i, batch in enumerate(DIFFICULTY_BATCHES):
+        print(f"[QuestionGen] OpenRouter: generating batch {i + 1}/4 ({batch['level']})...")
+        prompt = _build_batch_question_prompt(skills_str, job_description, batch)
+        try:
+            batch_questions = _call_openrouter_for_batch(prompt, api_key)
+            batch_questions = [str(q) for q in batch_questions if isinstance(q, str) and q.strip()]
+            all_questions.extend(batch_questions[:batch["batch_size"]])
+            print(f"[QuestionGen] OpenRouter: batch {i + 1} returned {len(batch_questions)} questions")
+        except Exception as e:
+            print(f"[QuestionGen] OpenRouter: batch {i + 1} ({batch['level']}) failed: {e}")
+            continue
+
+    if not all_questions:
+        raise RuntimeError("All OpenRouter question generation batches failed")
+
+    print(f"[QuestionGen] OpenRouter: total questions generated = {len(all_questions)}")
+    return all_questions
 
 
 # ── Generate Interview Questions Endpoint ──────────────────────────────────
@@ -1095,12 +1174,31 @@ def ask_gemma():
 
     skills_str = ", ".join(skills)
 
+    # ── Fetch job description from MongoDB ─────────────────────────────────
+    body = request.get_json(silent=True) or {}
+    job_id = (body.get("job_id") or "").strip()
+    job_description = ""
+
+    if job_id:
+        jobs_col = get_db()["jobs"]
+        decoded_id = unquote(job_id)
+        candidates = [job_id]
+        if decoded_id and decoded_id != job_id:
+            candidates.append(decoded_id)
+
+        job_doc = jobs_col.find_one(
+            {"job_id": {"$in": candidates}},
+            {"description": 1, "title": 1},
+        )
+        if job_doc:
+            job_description = job_doc.get("description", "")
+
     # ── Generate questions ─────────────────────────────────────────────────
-    # ✅ SWAP HERE: change to generate_questions_openrouter(skills_str)
+    # ✅ SWAP HERE: change to generate_questions_openrouter(skills_str, job_description)
     #    to use OpenRouter instead of Gemini.
     try:
-        questions = generate_questions_gemini(skills_str)
-        return jsonify({"questions": questions})
+        questions = generate_questions_gemini(skills_str, job_description)
+        return jsonify({"questions": questions, "total": len(questions)})
     except Exception as e:
         return jsonify(
             {"error": "generation_failed", "message": str(e)}
