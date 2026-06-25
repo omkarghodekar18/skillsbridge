@@ -50,8 +50,8 @@ load_dotenv()
 app = Flask(__name__)
 
 # CORS
-# cors_origins = os.getenv("CORS_ORIGINS", "https://skillsbridge-tawny.vercel.app").split(",")
-cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+cors_origins = os.getenv("CORS_ORIGINS", "https://skillsbridge-tawny.vercel.app").split(",")
+# cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 
 CORS(app, origins=cors_origins, supports_credentials=True)
 
@@ -929,18 +929,18 @@ DIFFICULTY_BATCHES = [
         "description": "intermediate",
         "category_mix": "8 CS Fundamentals (algorithms, data structures, design patterns, normalization, indexing), 17 technical skills & frameworks (how things work internally, comparisons, trade-offs, middleware, state management)",
     },
-    {
-        "level": "hard",
-        "batch_size": 25,
-        "description": "advanced and in-depth",
-        "category_mix": "7 CS Fundamentals (system design, concurrency, advanced OS/networking, memory management), 18 technical skills & frameworks (deep internals, optimization, edge cases, advanced patterns, caching, security)",
-    },
-    {
-        "level": "expert",
-        "batch_size": 25,
-        "description": "expert-level and challenging",
-        "category_mix": "7 CS Fundamentals (distributed systems, advanced algorithms, CAP theorem, consensus protocols, security), 18 technical skills & frameworks (architecture decisions, performance tuning, cutting-edge features, scaling strategies, low-level internals)",
-    },
+    # {
+    #     "level": "hard",
+    #     "batch_size": 25,
+    #     "description": "advanced and in-depth",
+    #     "category_mix": "7 CS Fundamentals (system design, concurrency, advanced OS/networking, memory management), 18 technical skills & frameworks (deep internals, optimization, edge cases, advanced patterns, caching, security)",
+    # },
+    # {
+    #     "level": "expert",
+    #     "batch_size": 25,
+    #     "description": "expert-level and challenging",
+    #     "category_mix": "7 CS Fundamentals (distributed systems, advanced algorithms, CAP theorem, consensus protocols, security), 18 technical skills & frameworks (architecture decisions, performance tuning, cutting-edge features, scaling strategies, low-level internals)",
+    # },
 ]
 
 
@@ -1116,6 +1116,8 @@ def generate_questions_gemini(skills_str, job_description=""):
             print(f"[QuestionGen] Gemini: batch {i + 1} ({batch['level']}) failed: {e}")
             # Continue with other batches even if one fails
             continue
+
+    print("[QuestionGen] Gemini: final questions:", all_questions)
 
     if not all_questions:
         raise RuntimeError("All Gemini question generation batches failed")
