@@ -50,8 +50,8 @@ load_dotenv()
 app = Flask(__name__)
 
 # CORS
-cors_origins = os.getenv("CORS_ORIGINS", "https://skillsbridge-tawny.vercel.app").split(",")
-# cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+# cors_origins = os.getenv("CORS_ORIGINS", "https://skillsbridge-tawny.vercel.app").split(",")
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 
 CORS(app, origins=cors_origins, supports_credentials=True)
 
@@ -929,18 +929,18 @@ DIFFICULTY_BATCHES = [
         "description": "intermediate",
         "category_mix": "8 CS Fundamentals (algorithms, data structures, design patterns, normalization, indexing), 17 technical skills & frameworks (how things work internally, comparisons, trade-offs, middleware, state management)",
     },
-    # {
-    #     "level": "hard",
-    #     "batch_size": 25,
-    #     "description": "advanced and in-depth",
-    #     "category_mix": "7 CS Fundamentals (system design, concurrency, advanced OS/networking, memory management), 18 technical skills & frameworks (deep internals, optimization, edge cases, advanced patterns, caching, security)",
-    # },
-    # {
-    #     "level": "expert",
-    #     "batch_size": 25,
-    #     "description": "expert-level and challenging",
-    #     "category_mix": "7 CS Fundamentals (distributed systems, advanced algorithms, CAP theorem, consensus protocols, security), 18 technical skills & frameworks (architecture decisions, performance tuning, cutting-edge features, scaling strategies, low-level internals)",
-    # },
+    {
+        "level": "hard",
+        "batch_size": 25,
+        "description": "advanced and in-depth",
+        "category_mix": "7 CS Fundamentals (system design, concurrency, advanced OS/networking, memory management), 18 technical skills & frameworks (deep internals, optimization, edge cases, advanced patterns, caching, security)",
+    },
+    {
+        "level": "expert",
+        "batch_size": 25,
+        "description": "expert-level and challenging",
+        "category_mix": "7 CS Fundamentals (distributed systems, advanced algorithms, CAP theorem, consensus protocols, security), 18 technical skills & frameworks (architecture decisions, performance tuning, cutting-edge features, scaling strategies, low-level internals)",
+    },
 ]
 
 
@@ -1154,6 +1154,14 @@ def generate_questions_openrouter(skills_str, job_description=""):
     return all_questions
 
 
+def generateTmp():
+    """Return a random question list from question_data.py."""
+    import random
+    from question_data import data
+    idx = random.randint(0, len(data) - 1)
+    return data[idx]
+
+
 # ── Generate Interview Questions Endpoint ──────────────────────────────────
 @app.route("/api/ask", methods=["POST", "OPTIONS"])
 @require_auth
@@ -1196,10 +1204,12 @@ def ask_gemma():
             job_description = job_doc.get("description", "")
 
     # ── Generate questions ─────────────────────────────────────────────────
+    # 🔧 Quick-test: uncomment the line below to use predefined questions from data.txt
     # ✅ SWAP HERE: change to generate_questions_openrouter(skills_str, job_description)
     #    to use OpenRouter instead of Gemini.
     try:
-        questions = generate_questions_gemini(skills_str, job_description)
+        questions = generateTmp()
+        #questions = generate_questions_gemini(skills_str, job_description)
         return jsonify({"questions": questions, "total": len(questions)})
     except Exception as e:
         return jsonify(
