@@ -1157,8 +1157,10 @@ def generate_questions_openrouter(skills_str, job_description=""):
 def generateTmp():
     """Return a random question list from question_data.py."""
     import random
+    import time
     from question_data import data
     idx = random.randint(0, len(data) - 1)
+    time.sleep(5)
     return data[idx]
 
 

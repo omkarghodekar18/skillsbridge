@@ -320,7 +320,6 @@ export default function InterviewSessionPage() {
     setSaveError(null)
     setIsSavingInterview(true)
     try {
-      const token = await getToken()
       const apiBase = process.env.NEXT_PUBLIC_API_URL
       const questionList = finalAnswers.map((a) => a.question)
       const answerList = finalAnswers.map((a) => a.transcript)
@@ -328,11 +327,13 @@ export default function InterviewSessionPage() {
       let evaluation: InterviewEvaluation | null = null
 
       try {
+        // Fetch a fresh token right before the evaluation call
+        const evalToken = await getToken()
         const evalRes = await fetch(`${apiBase}/api/evaluate-interview`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
+            Authorization: `Bearer ${evalToken}`,
           },
           body: JSON.stringify({
             job_id: String(params.id),
@@ -349,11 +350,14 @@ export default function InterviewSessionPage() {
         evaluation = null
       }
 
+      // Fetch a fresh token before saving — the evaluation call above may
+      // have taken long enough for the previous token to expire.
+      const saveToken = await getToken()
       const saveRes = await fetch(`${apiBase}/api/interviews`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${saveToken}`,
         },
         body: JSON.stringify({
           job_id: String(params.id),
